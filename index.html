@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simulador Sismorresistente 3D - Estructura Estabilizada</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        body { background-color: #0f172a; color: #f8fafc; display: flex; height: 100vh; overflow: hidden; }
+        
+        /* Panel Lateral de Control */
+        .sidebar { width: 420px; background: #1e293b; border-right: 1px solid #334155; display: flex; flex-direction: column; padding: 15px; overflow-y: auto; }
+        .sidebar h2 { font-size: 1rem; color: #38bdf8; margin-bottom: 10px; border-bottom: 2px solid #334155; padding-bottom: 4px; }
+        
+        .control-group { margin-bottom: 12px; }
+        .control-group label { display: block; font-size: 0.8rem; color: #94a3b8; margin-bottom: 3px; }
+        .control-group input[type="range"] { width: 100%; accent-color: #38bdf8; cursor: pointer; }
+        .control-group span { font-weight: bold; color: #38bdf8; float: right; }
+        
+        .btn-toggle { width: 100%; padding: 10px; margin-top: 5px; border: none; border-radius: 6px; font-weight: bold; cursor: pointer; transition: 0.2s; font-size: 0.85rem; }
+        .btn-off { background: #334155; color: #94a3b8; }
+        .btn-on { background: #0284c7; color: #fff; box-shadow: 0 0 12px rgba(56,189,248,0.4); }
+        .btn-on:hover { background: #0284c7; filter: brightness(1.1); }
+        
+        .metrics { background: #0f172a; border: 1px solid #334155; padding: 10px; border-radius: 8px; margin-top: 5px; }
+        .metrics p { font-size: 0.82rem; margin-bottom: 4px; display: flex; justify-content: space-between; }
+        .metrics span { color: #4ade80; font-weight: bold; }
+
+        /* Contenedor Principal 3D y Gráficos */
+        .main-content { flex: 1; display: flex; flex-direction: column; position: relative; }
+        #canvas-container { flex: 1; width: 100%; height: 100%; position: relative; }
+        
+        .info-overlay { position: absolute; top: 15px; left: 15px; background: rgba(30, 41, 59, 0.85); padding: 10px 15px; border-radius: 8px; border: 1px solid #334155; backdrop-filter: blur(5px); pointer-events: none; }
+        .info-overlay h1 { font-size: 1rem; color: #fff; }
+        .info-overlay p { font-size: 0.75rem; color: #94a3b8; margin-top: 2px; }
+
+        .chart-box { height: 140px; background: #1e293b; border-top: 1px solid #334155; padding: 8px 15px; display: flex; flex-direction: column; }
+        .chart-box h3 { font-size: 0.8rem; color: #94a3b8; margin-bottom: 4px; }
+        canvas.chart { width: 100%; flex: 1; background: #0f172a; border-radius: 4px; }
+    </style>
+    <!-- Three.js para renderizado 3D -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+
+    <!-- PANEL DE CONTROL -->
+    <div class="sidebar">
+        <h2>🏗️ Parámetros del Sismo</h2>
+        <div class="control-group">
+            <label>Frecuencia del Sismo (Hz): <span id="val-freq">1.2</span></label>
+            <input type="range" id="freq" min="0.5" max="3.0" step="0.1" value="1.2">
+        </div>
+        <div class="control-group">
+            <label>Amplitud / Intensidad (cm): <span id="val-amp">1.5</span></label>
+            <input type="range" id="amp" min="0.5" max="3.0" step="0.1" value="1.5">
+        </div>
+
+        <h2>⚙️ Sistema de Protección</h2>
+        <div class="control-group">
+            <label>Configuración Estructural:</label>
+            <button id="btn-dampers" class="btn-toggle btn-on" onclick="toggleDampers()">Con Disipadores (Delante y Atrás)</button>
+        </div>
+
+        <h2>📊 Datos Experimentales (Sección 13)</h2>
+        <div class="metrics">
+            <p>Desplazamiento Techo: <span id="disp-val">0.00 cm</span></p>
+            <p>Periodo Natural (T): <span id="period-val">0.85 s</span></p>
+            <p>Frecuencia Natural (f): <span id="freq-nat-val">1.18 Hz</span></p>
+            <p>Energía Impacto (E): <span id="energy-val">0.05 J</span></p>
+            <p>Momento (p): <span id="momentum-val">0.15 kg·m/s</span></p>
+            <p>Eficiencia Sísmica: <span id="red-val">65% Reducido</span></p>
+        </div>
+        
+        <p style="font-size: 0.72rem; color: #64748b; margin-top: 8px; line-height: 1.3;">
+            💡 <em>Nota:</em> Simulación ajustada con arriostramientos simétricos delanteros y traseros para equilibrar la rigidez lateral.
+        </p>
+    </div>
+
+    <!-- ÁREA 3D Y GRÁFICO -->
+    <div class="main-content">
+        <div class="info-overlay">
+            <h1>Simulador Dinámico de Maqueta Antisísmica</h1>
+            <p>Estructura de 4 Niveles - Arriostramiento Doble (Frontal y Posterior)</p>
+        </div>
+        
+        <div id="canvas-container"></div>
+
+        <div class="chart-box">
+            <h3>Gráfica de Desplazamiento del Techo vs Tiempo</h3>
+            <canvas id="waveCanvas" class="chart"></canvas>
+        </div>
+    </div>
+
+    <script>
+        // Configuración de la escena 3D con Three.js
+        const container = document.getElementById('canvas-container');
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x0f172a);
+
+        const camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 1000);
+        camera.position.set(25, 20, 35);
+        camera.lookAt(0, 7, 0);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(container.clientWidth, container.clientHeight);
+        container.appendChild(renderer.domElement);
+
+        // Iluminación
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+        scene.add(ambientLight);
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        dirLight.position.set(10, 30, 20);
+        scene.add(dirLight);
+
+        // Plataforma / Base móvil simulada
+        const baseGeo = new THREE.BoxGeometry(14, 0.5, 14);
+        const baseMat = new THREE.MeshStandardMaterial({ color: 0x334155 });
+        const baseMesh = new THREE.Mesh(baseGeo, baseMat);
+        baseMesh.position.y = -0.25;
+        scene.add(baseMesh);
+
+        // Creación del edificio por niveles (4 pisos)
+        const levels = 4;
+        const floorHeight = 4;
+        const buildingGroup = new THREE.Group();
+        scene.add(buildingGroup);
+
+        const floors = [];
+        const dampers = [];
+
+        const woodMat = new THREE.MeshStandardMaterial({ color: 0xd4a373, roughness: 0.6 }); 
+        const slabMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, roughness: 0.8 }); 
+        const springMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0, metalness: 0.8 }); 
+
+        for (let i = 0; i < levels; i++) {
+            const floorGroup = new THREE.Group();
+            floorGroup.position.y = i * floorHeight;
+
+            if (i > 0) {
+                const slab = new THREE.Mesh(new THREE.BoxGeometry(10, 0.3, 10), slabMat);
+                slab.position.y = 0;
+                floorGroup.add(slab);
+            }
+
+            const colPositions = [[-4.5, -4.5], [4.5, -4.5], [-4.5, 4.5], [4.5, 4.5]];
+            colPositions.forEach(pos => {
+                const col = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, floorHeight), woodMat);
+                col.position.set(pos[0], floorHeight / 2, pos[1]);
+                floorGroup.add(col);
+            });
+
+            // Disipadores simétricos en los primeros dos niveles (Tanto en Z = -4.5 [atrás] como en Z = 4.5 [adelante])
+            if (i < 2) {
+                const damperGroup = new THREE.Group();
+                
+                // Lado Trasero (Z = -4.5)
+                const diagBack = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 5.8), woodMat);
+                diagBack.rotation.z = Math.PI / 4;
+                diagBack.position.set(0, floorHeight / 2, -4.5);
+                const springBack = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.25, 1.5), springMat);
+                springBack.position.set(1.5, floorHeight / 2, -4.5);
+                
+                // Lado Delantero (Z = 4.5)
+                const diagFront = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 5.8), woodMat);
+                diagFront.rotation.z = Math.PI / 4;
+                diagFront.position.set(0, floorHeight / 2, 4.5);
+                const springFront = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.25, 1.5), springMat);
+                springFront.position.set(1.5, floorHeight / 2, 4.5);
+
+                damperGroup.add(diagBack);
+                damperGroup.add(springBack);
+                damperGroup.add(diagFront);
+                damperGroup.add(springFront);
+
+                floorGroup.add(damperGroup);
+                dampers.push(damperGroup);
+            }
+
+            buildingGroup.add(floorGroup);
+            floors.push(floorGroup);
+        }
+
+        let useDampers = true;
+        function toggleDampers() {
+            useDampers = !useDampers;
+            const btn = document.getElementById('btn-dampers');
+            if (useDampers) {
+                btn.className = "btn-toggle btn-on";
+                btn.innerText = "Con Disipadores (Delante y Atrás)";
+                dampers.forEach(d => d.visible = true);
+            } else {
+                btn.className = "btn-toggle btn-off";
+                btn.innerText = "Sin Disipadores (Estructura Rígida/Vulnerable)";
+                dampers.forEach(d => d.visible = false);
+            }
+        }
+
+        const waveCanvas = document.getElementById('waveCanvas');
+        const waveCtx = waveCanvas.getContext('2d');
+        let waveHistory = [];
+
+        let time = 0;
+        function animate() {
+            requestAnimationFrame(animate);
+
+            const freq = parseFloat(document.getElementById('freq').value);
+            const amp = parseFloat(document.getElementById('amp').value);
+
+            document.getElementById('val-freq').innerText = freq.toFixed(1);
+            document.getElementById('val-amp').innerText = amp.toFixed(1);
+
+            time += 0.04 * freq;
+
+            const groundDisplacement = Math.sin(time) * amp * 0.4;
+            baseMesh.position.x = groundDisplacement;
+
+            const efficiency = useDampers ? 0.4 : 1.0; 
+
+            floors.forEach((floor, idx) => {
+                if (idx > 0) {
+                    const ratio = idx / levels;
+                    floor.position.x = groundDisplacement + (Math.sin(time - idx * 0.5) * amp * ratio * 0.3 * efficiency);
+                    floor.rotation.z = 0; 
+                }
+            });
+
+            const currentTopDisp = Math.abs(floors[levels - 1].position.x - groundDisplacement);
+            const maxDispStr = currentTopDisp.toFixed(2);
+            
+            document.getElementById('disp-val').innerText = maxDispStr + " cm";
+            document.getElementById('red-val').innerText = useDampers ? "65% Reducido" : "0% (Sin protección)";
+
+            // Cálculos teóricos simulados basados en tu sección experimental
+            const calculatedT = useDampers ? "0.75 s" : "1.10 s";
+            const calculatedFreq = useDampers ? "1.33 Hz" : "0.91 Hz";
+            document.getElementById('period-val').innerText = calculatedT;
+            document.getElementById('freq-nat-val').innerText = calculatedFreq;
+
+            // Gráfica
+            waveHistory.push(parseFloat(maxDispStr));
+            if (waveHistory.length > 100) waveHistory.shift();
+
+            waveCanvas.width = waveCanvas.clientWidth;
+            waveCanvas.height = waveCanvas.clientHeight;
+            
+            waveCtx.clearRect(0, 0, waveCanvas.width, waveCanvas.height);
+            waveCtx.strokeStyle = useDampers ? "#38bdf8" : "#f43f5e";
+            waveCtx.lineWidth = 2;
+            waveCtx.beginPath();
+            
+            const stepX = waveCanvas.width / 100;
+            waveHistory.forEach((val, index) => {
+                const x = index * stepX;
+                const y = waveCanvas.height - (val / 3.0) * waveCanvas.height * 0.8 - 10;
+                if (index === 0) waveCtx.moveTo(x, y);
+                else waveCtx.lineTo(x, y);
+            });
+            waveCtx.stroke();
+
+            renderer.render(scene, camera);
+        }
+
+        animate();
+
+        window.addEventListener('resize', () => {
+            camera.aspect = container.clientWidth / container.clientHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(container.clientWidth, container.clientHeight);
+        });
+    </script>
+</body>
+</html>
